@@ -1,0 +1,48 @@
+from flask import Flask
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from apscheduler.schedulers.background import BackgroundScheduler
+
+# Initialize extensions
+db = SQLAlchemy()
+migrate = Migrate()
+jwt = JWTManager()
+scheduler = BackgroundScheduler()
+
+
+def create_app(config_name='development'):
+    app = Flask(__name__)
+
+    # Import and apply configuration
+    from app.config.config import config_by_name
+    app.config.from_object(config_by_name[config_name])
+
+    # Initialize extensions with app
+    CORS(app)
+    db.init_app(app)
+    migrate.init_app(app, db)
+    jwt.init_app(app)
+
+    # Register blueprints
+    from app.api.events import events_bp
+    from app.api.reminders import reminders_bp
+    from app.api.users import users_bp
+    from app.auth import auth_bp
+
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    app.register_blueprint(users_bp, url_prefix='/api/users')
+    app.register_blueprint(events_bp, url_prefix='/api/events')
+    app.register_blueprint(reminders_bp, url_prefix='/api/reminders')
+
+    # Initialize scheduler
+    if not scheduler.running:
+        scheduler.start()
+
+    # Shell context for flask cli
+    @app.shell_context_processor
+    def ctx():
+        return {'app': app, 'db': db}
+
+    return app
