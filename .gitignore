@@ -47,3 +47,4 @@ yarn.lock
 *.njsproj
 *.sln
 .DS_Store
+*.bat
