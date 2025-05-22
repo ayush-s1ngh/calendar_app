@@ -2,4 +2,5 @@ from flask import Blueprint
 
 events_bp = Blueprint('events', __name__)
 
-from . import routes
+# Remove the import of routes for now
+# from . import routes

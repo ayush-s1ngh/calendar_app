@@ -7,7 +7,7 @@ Flask-JWT-Extended==4.5.3
 Flask-Cors==4.0.0
 
 # Database
-SQLAlchemy==2.0.23
+SQLAlchemy
 psycopg2-binary==2.9.9  # For PostgreSQL in production
 
 # Scheduling and background tasks

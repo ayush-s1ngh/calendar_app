@@ -16,7 +16,7 @@ def create_app(config_name='development'):
     app = Flask(__name__)
 
     # Import and apply configuration
-    from app.config.config import config_by_name
+    from .config.config import config_by_name
     app.config.from_object(config_by_name[config_name])
 
     # Initialize extensions with app
@@ -26,10 +26,10 @@ def create_app(config_name='development'):
     jwt.init_app(app)
 
     # Register blueprints
-    from app.api.events import events_bp
-    from app.api.reminders import reminders_bp
-    from app.api.users import users_bp
-    from app.auth import auth_bp
+    from .api.events import events_bp
+    from .api.reminders import reminders_bp
+    from .api.users import users_bp
+    from .auth import auth_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(users_bp, url_prefix='/api/users')
