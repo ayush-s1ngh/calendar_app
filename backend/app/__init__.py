@@ -39,10 +39,24 @@ def create_app(config_name='development'):
     # Initialize scheduler
     if not scheduler.running:
         scheduler.start()
+        # Initialize reminder scheduler
+        from .utils.reminder_scheduler import init_reminder_scheduler
+        init_reminder_scheduler()
 
     # Shell context for flask cli
     @app.shell_context_processor
     def ctx():
         return {'app': app, 'db': db}
+
+    # Error handlers
+    @app.errorhandler(404)
+    def not_found(error):
+        from .utils.responses import error_response
+        return error_response("Not found", 404)
+
+    @app.errorhandler(500)
+    def server_error(error):
+        from .utils.responses import error_response
+        return error_response("Internal server error", 500)
 
     return app
