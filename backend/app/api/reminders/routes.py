@@ -1,6 +1,6 @@
 from flask import request
 from flask_jwt_extended import jwt_required, current_user
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ... import db
 from . import reminders_bp
@@ -37,10 +37,10 @@ def get_event_reminders(event_id):
             reminders_data.append({
                 "id": reminder.id,
                 "event_id": reminder.event_id,
-                "reminder_time": reminder.reminder_time.isoformat(),
+                "reminder_time": reminder.reminder_time.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
                 "notification_sent": reminder.notification_sent,
-                "created_at": reminder.created_at.isoformat(),
-                "updated_at": reminder.updated_at.isoformat()
+                "created_at": reminder.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                "updated_at": reminder.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
             })
 
         return success_response(data=reminders_data)
@@ -107,10 +107,10 @@ def create_reminder(event_id):
         reminder_data = {
             "id": new_reminder.id,
             "event_id": new_reminder.event_id,
-            "reminder_time": new_reminder.reminder_time.isoformat(),
+            "reminder_time": new_reminder.reminder_time.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
             "notification_sent": new_reminder.notification_sent,
-            "created_at": new_reminder.created_at.isoformat(),
-            "updated_at": new_reminder.updated_at.isoformat()
+            "created_at": new_reminder.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "updated_at": new_reminder.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
         }
 
         logger.info(f"Reminder created for event {event_id} by user {current_user.username}")

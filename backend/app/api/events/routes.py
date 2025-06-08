@@ -1,6 +1,6 @@
 from flask import request
 from flask_jwt_extended import jwt_required, current_user
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ... import db
 from . import events_bp
@@ -27,12 +27,12 @@ def get_all_events():
                 "id": event.id,
                 "title": event.title,
                 "description": event.description,
-                "start_datetime": event.start_datetime.isoformat(),
-                "end_datetime": event.end_datetime.isoformat() if event.end_datetime else None,
+                "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
                 "is_all_day": event.is_all_day,
                 "color": event.color,
-                "created_at": event.created_at.isoformat(),
-                "updated_at": event.updated_at.isoformat()
+                "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
             })
 
         return success_response(data=events_data)
@@ -64,12 +64,12 @@ def get_event(event_id):
             "id": event.id,
             "title": event.title,
             "description": event.description,
-            "start_datetime": event.start_datetime.isoformat(),
-            "end_datetime": event.end_datetime.isoformat() if event.end_datetime else None,
+            "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
-            "created_at": event.created_at.isoformat(),
-            "updated_at": event.updated_at.isoformat()
+            "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
         }
 
         return success_response(data=event_data)
@@ -105,6 +105,7 @@ def create_event():
         # Required fields
         title = data.get('title')
         start_datetime_str = data.get('start_datetime')
+        print("start datetime in backend : ", start_datetime_str)
 
         # Optional fields
         description = data.get('description')
@@ -152,12 +153,12 @@ def create_event():
             "id": new_event.id,
             "title": new_event.title,
             "description": new_event.description,
-            "start_datetime": new_event.start_datetime.isoformat(),
-            "end_datetime": new_event.end_datetime.isoformat() if new_event.end_datetime else None,
+            "start_datetime": new_event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "end_datetime": new_event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if new_event.end_datetime else None,
             "is_all_day": new_event.is_all_day,
             "color": new_event.color,
-            "created_at": new_event.created_at.isoformat(),
-            "updated_at": new_event.updated_at.isoformat()
+            "created_at": new_event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "updated_at": new_event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
         }
 
         logger.info(f"Event created: {new_event.id} by user {current_user.username}")
@@ -259,12 +260,12 @@ def update_event(event_id):
             "id": event.id,
             "title": event.title,
             "description": event.description,
-            "start_datetime": event.start_datetime.isoformat(),
-            "end_datetime": event.end_datetime.isoformat() if event.end_datetime else None,
+            "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
-            "created_at": event.created_at.isoformat(),
-            "updated_at": event.updated_at.isoformat()
+            "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
         }
 
         logger.info(f"Event {event_id} updated by user {current_user.username}")
@@ -374,12 +375,12 @@ def move_event(event_id):
             "id": event.id,
             "title": event.title,
             "description": event.description,
-            "start_datetime": event.start_datetime.isoformat(),
-            "end_datetime": event.end_datetime.isoformat() if event.end_datetime else None,
+            "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
-            "created_at": event.created_at.isoformat(),
-            "updated_at": event.updated_at.isoformat()
+            "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
         }
 
         logger.info(f"Event {event_id} moved by user {current_user.username}")
