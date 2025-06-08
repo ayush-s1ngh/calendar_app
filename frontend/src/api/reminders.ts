@@ -1,19 +1,18 @@
 import apiClient from './client';
-import { ApiResponse, Reminder } from '../types';
 
-export const getEventReminders = async (eventId: number): Promise<ApiResponse<Reminder[]>> => {
-  const response = await apiClient.get<ApiResponse<Reminder[]>>(`/reminders/event/${eventId}/reminders`);
+export const fetchReminders = async (eventId: number) => {
+  const response = await apiClient.get(`/events/${eventId}/reminders`);
   return response.data;
 };
 
-export const createReminder = async (eventId: number, reminderTime: string): Promise<ApiResponse<Reminder>> => {
-  const response = await apiClient.post<ApiResponse<Reminder>>(`/reminders/event/${eventId}/reminders`, {
-    reminder_time: reminderTime,
+export const createReminder = async (data: { event_id: number, reminder_time: string }) => {
+  const response = await apiClient.post(`/events/${data.event_id}/reminders`, {
+    reminder_time: data.reminder_time
   });
   return response.data;
 };
 
-export const deleteReminder = async (id: number): Promise<ApiResponse<null>> => {
-  const response = await apiClient.delete<ApiResponse<null>>(`/reminders/${id}`);
+export const deleteReminder = async (id: number) => {
+  const response = await apiClient.delete(`/reminders/${id}`);
   return response.data;
 };
