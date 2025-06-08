@@ -8,10 +8,10 @@
 - APScheduler for scheduled tasks and reminders
 
 ## Frontend
-- HTML5, CSS3, JavaScript (ES6+)
-- Vue.js 3 as the frontend framework 
-- Axios for API requests 
-- TailwindCSS for styling 
+- HTML5, CSS3, TypeScript
+- React as the frontend framework
+- Axios for API requests
+- Material UI for styling and components
 - LocalStorage/Cookies for storing theme preferences
 
 ## Database
@@ -79,10 +79,10 @@
 # Key Frontend Components/Libraries
 
 - FullCalendar.js - Core calendar display with drag-and-drop functionality
-- Vue Color Picker - For selecting event colors
-- DateTimePicker - For selecting dates and times (Vue Flatpickr or similar)
-- Vue Toast Notification - For displaying reminders and notifications
-- VueUse - Utilities for theme switching and other common operations
+- Material UI Color Picker - For selecting event colors
+- MUI X Date Pickers - For selecting dates and times
+- Material UI Alert - For displaying notifications and error messages
+- TanStack React Query - For data fetching, caching, and state management
 
 # High-Level Architecture
 
