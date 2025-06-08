@@ -28,7 +28,7 @@ interface ThemeProviderProps {
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, setUser } = useAuth();
   const [mode, setMode] = useState<ThemeMode>(
     user?.theme_preference || (localStorage.getItem('theme') as ThemeMode) || 'light'
   );
@@ -71,11 +71,16 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     // Update localStorage theme
     localStorage.setItem('theme', mode);
 
-    // Update theme in backend if authenticated
+    // Update theme in backend if authenticated and update user in context
     if (isAuthenticated && user) {
-      updateThemeApi(mode).catch(console.error);
+      updateThemeApi(mode)
+        .then(() => {
+          // Immediately update the user object in AuthContext
+          setUser({ ...user, theme_preference: mode });
+        })
+        .catch(console.error);
     }
-  }, [mode, isAuthenticated, user]);
+  }, [mode, isAuthenticated, user, setUser]);
 
   // Set theme from user preferences when user data is loaded
   useEffect(() => {
