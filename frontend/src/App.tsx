@@ -1,9 +1,9 @@
 import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter as Router, useRoutes } from 'react-router-dom';
+import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
-import routes from './routes';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import AppRoutes from './AppRoutes'; // Import the component we just created
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -14,21 +14,16 @@ const queryClient = new QueryClient({
   },
 });
 
-const AppRoutes: React.FC = () => {
-  const element = useRoutes(routes);
-  return element;
-};
-
-const App: React.FC = () => {
+const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <Router>
+      <BrowserRouter>
         <AuthProvider>
           <ThemeProvider>
             <AppRoutes />
           </ThemeProvider>
         </AuthProvider>
-      </Router>
+      </BrowserRouter>
     </QueryClientProvider>
   );
 };
