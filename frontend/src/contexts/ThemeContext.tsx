@@ -29,65 +29,56 @@ interface ThemeProviderProps {
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
   const { user, isAuthenticated, setUser } = useAuth();
-  const [mode, setMode] = useState<ThemeMode>(
-    user?.theme_preference || (localStorage.getItem('theme') as ThemeMode) || 'light'
-  );
 
-  // Create theme
+  const [mode, setMode] = useState<ThemeMode>(() => {
+    if (user?.theme_preference) {
+      return user.theme_preference;
+    }
+    const storedTheme = localStorage.getItem('theme') as ThemeMode;
+    if (storedTheme === 'light' || storedTheme === 'dark') {
+      return storedTheme;
+    }
+    return 'light';
+  });
+
   const theme: Theme = createTheme({
-    colorSchemes: {
-      light: {
-        palette: {
-          primary: {
-            main: '#1976d2',
-          },
-          secondary: {
-            main: '#dc004e',
-          },
-          background: {
-            default: '#f5f5f5',
-            paper: '#ffffff',
-          },
-        },
+    palette: {
+      mode: mode,
+      primary: {
+        main: '#1976d2',
       },
-      dark: {
-        palette: {
-          primary: {
-            main: '#1976d2',
-          },
-          secondary: {
-            main: '#dc004e',
-          },
-          background: {
-            default: '#121212',
-            paper: '#1e1e1e',
-          },
-        },
+      secondary: {
+        main: '#dc004e',
+      },
+      background: {
+        default: mode === 'light' ? '#f5f5f5' : '#121212',
+        paper: mode === 'light' ? '#ffffff' : '#1e1e1e',
       },
     },
   });
 
   useEffect(() => {
-    // Update localStorage theme
     localStorage.setItem('theme', mode);
 
-    // Update theme in backend if authenticated and update user in context
-    if (isAuthenticated && user) {
+    if (isAuthenticated && user && user.theme_preference !== mode) {
+      console.log(`Attempting to update theme on backend to: ${mode}`);
       updateThemeApi(mode)
         .then(() => {
-          // Immediately update the user object in AuthContext
+          console.log(`Backend theme updated to: ${mode}. Updating local user context.`);
           setUser({ ...user, theme_preference: mode });
         })
-        .catch(console.error);
+        .catch((error) => {
+          console.error('Failed to update theme on backend:', error);
+        });
     }
   }, [mode, isAuthenticated, user, setUser]);
 
-  // Set theme from user preferences when user data is loaded
   useEffect(() => {
-    if (user?.theme_preference) {
+    if (user?.theme_preference && user.theme_preference !== mode) {
+      console.log(`User preference found: ${user.theme_preference}. Setting local mode.`);
       setMode(user.theme_preference);
     }
-  }, [user]);
+  }, [user, mode]);
 
   const toggleTheme = () => {
     setMode((prevMode) => (prevMode === 'light' ? 'dark' : 'light'));
@@ -101,8 +92,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
 
   return (
     <ThemeContext.Provider value={value}>
-      <MuiThemeProvider theme={theme} defaultMode={mode}>
-        <CssBaseline />
+      {/* MuiThemeProvider wraps your app to apply Material-UI theme */}
+      <MuiThemeProvider theme={theme}> {/* defaultMode is not a prop for MuiThemeProvider */}
+        <CssBaseline /> {/* Resets CSS for consistent base styling */}
         {children}
       </MuiThemeProvider>
     </ThemeContext.Provider>
