@@ -88,8 +88,13 @@ def create_reminder(event_id):
         if not is_valid:
             return error_response(reminder_time_obj, 400)
 
-        # Ensure reminder time is before event start time
-        if reminder_time_obj >= event.start_datetime:
+        # Ensure event.start_datetime is timezone aware before comparing
+        event_start = event.start_datetime
+        if event_start.tzinfo is None:
+            event_start = event_start.replace(tzinfo=timezone.utc)
+
+        # Now both datetimes are timezone-aware for proper comparison
+        if reminder_time_obj >= event_start:
             return error_response("Reminder time must be before event start time", 400)
 
         # Create new reminder
