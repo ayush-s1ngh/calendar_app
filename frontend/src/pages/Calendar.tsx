@@ -9,7 +9,9 @@ import AddIcon from '@mui/icons-material/Add';
 import { useAuth } from '../contexts/AuthContext';
 import EventDialog from '../components/EventDialog';
 import EventFilter, { EventFilters } from '../components/EventFilter';
+import NotificationAlert from '../components/notifications/Alert';
 import { fetchEvents, updateEventDates } from '../api/events';
+import { fetchReminders } from '../api/reminders';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { normalizeDate, toBackendDate } from '../utils/dateUtils';
 
@@ -20,7 +22,13 @@ const Calendar = () => {
   const [selectedEvent, setSelectedEvent] = useState<EventInput | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [events, setEvents] = useState<any[]>([]);
+  const [eventReminders, setEventReminders] = useState<Record<number, number>>({});
   const [viewMode, setViewMode] = useState(false);
+  const [notification, setNotification] = useState({
+    open: false,
+    message: '',
+    severity: 'info' as 'info' | 'success' | 'error' | 'warning'
+  });
   const [filters, setFilters] = useState<EventFilters>({
     search: '',
     startDate: null,
@@ -54,16 +62,56 @@ const Calendar = () => {
     }
   }, [apiResponse]);
 
+  // Fetch reminders for each event (efficiently using Promise.all)
+  useEffect(() => {
+    const fetchAllReminders = async () => {
+      if (events.length === 0) return;
+
+      try {
+        const remindersMap: Record<number, number> = {};
+
+        const promises = events.map(event =>
+          fetchReminders(event.id)
+            .then(response => {
+              if (response.data && response.data.length > 0) {
+                remindersMap[event.id] = response.data.length;
+              }
+            })
+            .catch(err => console.error(`Error fetching reminders for event ${event.id}:`, err))
+        );
+
+        await Promise.all(promises);
+        setEventReminders(remindersMap);
+      } catch (err) {
+        console.error("Error fetching reminders:", err);
+      }
+    };
+
+    if (events.length > 0) {
+      fetchAllReminders();
+    }
+  }, [events]);
+
   // Drag/drop event
   const updateEventMutation = useMutation({
     mutationFn: updateEventDates,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['events'] });
+      setNotification({
+        open: true,
+        message: 'Event updated successfully',
+        severity: 'success'
+      });
     },
     onError: () => {
       if (calendarRef.current) {
         calendarRef.current.getApi().refetchEvents();
       }
+      setNotification({
+        open: true,
+        message: 'Failed to update event',
+        severity: 'error'
+      });
     }
   });
 
@@ -124,7 +172,6 @@ const Calendar = () => {
       // For timed events without end time, provide default (1 hour duration)
       eventData.end = new Date(info.event.start.getTime() + 60 * 60 * 1000);
     }
-    // For all-day events without end time, omit the end property entirely
 
     setSelectedEvent(eventData);
     setViewMode(true);
@@ -140,6 +187,10 @@ const Calendar = () => {
 
   const handleFilterChange = (newFilters: EventFilters) => {
     setFilters(newFilters);
+  };
+
+  const closeNotification = () => {
+    setNotification({...notification, open: false});
   };
 
   // Apply filters to events
@@ -175,9 +226,11 @@ const Calendar = () => {
       }
 
       // All-day filter
-      return !(!filters.showAllDay && event.is_all_day);
+      if (!filters.showAllDay && event.is_all_day) {
+        return false;
+      }
 
-
+      return true;
     });
   }, [events, filters]);
 
@@ -185,12 +238,15 @@ const Calendar = () => {
     // For formatted events, create the base event object
     const formattedEvent: any = {
       id: event.id,
-      title: event.title,
+      title: eventReminders[event.id] ? `${event.title} 🔔` : event.title,
       start: event.start_datetime,
       allDay: event.is_all_day,
       backgroundColor: event.color,
       borderColor: event.color,
-      extendedProps: { description: event.description }
+      extendedProps: {
+        description: event.description,
+        hasReminders: !!eventReminders[event.id]
+      }
     };
 
     // Only add end property if it exists in the event data
@@ -263,6 +319,13 @@ const Calendar = () => {
           onViewMode={viewMode}
         />
       )}
+
+      <NotificationAlert
+        open={notification.open}
+        message={notification.message}
+        severity={notification.severity}
+        onClose={closeNotification}
+      />
     </Box>
   );
 };

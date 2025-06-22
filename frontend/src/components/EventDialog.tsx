@@ -13,6 +13,8 @@ import { normalizeDate, toBackendDate, parseBackendDate } from '../utils/dateUti
 import { useFormik } from 'formik';
 import * as yup from 'yup';
 import ColorPicker from './ColorPicker';
+import NotificationsIcon from '@mui/icons-material/Notifications';
+import ReminderList from './reminders/ReminderList';
 
 interface EventDialogProps {
   open: boolean;
@@ -191,6 +193,8 @@ const EventDialog = ({ open, onClose, event, onViewMode = false }: EventDialogPr
   const hasError = createMutation.isError || updateMutation.isError || deleteMutation.isError;
   const errorMessage = createMutation.error || updateMutation.error || deleteMutation.error;
 
+  const showRemindersTab = isEditMode && fullEvent?.id;
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>
@@ -198,9 +202,22 @@ const EventDialog = ({ open, onClose, event, onViewMode = false }: EventDialogPr
       </DialogTitle>
 
       {isEditMode && !viewMode && (
-        <Tabs value={activeTab} onChange={handleTabChange} sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs
+          value={activeTab}
+          onChange={handleTabChange}
+          sx={{ borderBottom: 1, borderColor: 'divider' }}
+          variant="scrollable"
+          scrollButtons="auto"
+        >
           <Tab label="Details" />
           <Tab label="Edit" />
+          {showRemindersTab && (
+            <Tab
+              label="Reminders"
+              icon={<NotificationsIcon />}
+              iconPosition="start"
+            />
+          )}
         </Tabs>
       )}
 
@@ -312,6 +329,16 @@ const EventDialog = ({ open, onClose, event, onViewMode = false }: EventDialogPr
                   Edit Event
                 </Button>
               </>
+            ) : isEditMode && activeTab === 2 && showRemindersTab ? (
+              // Reminders tab
+              <Box sx={{ mt: 1 }}>
+                {fullEvent && (
+                  <ReminderList
+                    eventId={fullEvent.id}
+                    eventStartDateTime={fullEvent.start_datetime}
+                  />
+                )}
+              </Box>
             ) : (
               // Edit Mode Form (either new event or edit tab)
               <form onSubmit={formik.handleSubmit}>

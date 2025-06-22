@@ -52,6 +52,20 @@ export interface Reminder {
   updated_at: string;
 }
 
+export interface ReminderFormData {
+  reminder_time: Date;
+}
+
+// Notification Type for frontend display
+export interface Notification {
+  id: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  message: string;
+  duration?: number;
+  eventId?: number;
+  title?: string;
+}
+
 // API Response Types
 export interface ApiResponse<T> {
   success: boolean;
