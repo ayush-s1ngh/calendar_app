@@ -14,6 +14,7 @@ import { fetchEvents, updateEventDates } from '../api/events';
 import { fetchReminders } from '../api/reminders';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { normalizeDate, toBackendDate } from '../utils/dateUtils';
+import { FullCalendarStyles } from '../theme/FullCalendarStyles';
 
 const Calendar = () => {
   const { isAuthenticated } = useAuth();
@@ -259,6 +260,8 @@ const Calendar = () => {
 
   return (
     <Box sx={{ p: 3 }}>
+      {/* Add FullCalendarStyles component here */}
+      <FullCalendarStyles />
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
         <Typography variant="h4">Calendar</Typography>
         <Button
