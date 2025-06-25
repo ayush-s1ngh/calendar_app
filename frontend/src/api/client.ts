@@ -1,9 +1,9 @@
 import axios, { AxiosRequestConfig, AxiosResponse, AxiosError } from 'axios';
 import { AuthTokens } from '../types';
 
-// Create axios instance
+// Create axios instance with environment variable base URL
 const apiClient = axios.create({
-  baseURL: 'http://localhost:5000/api',
+  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api',
   headers: {
     'Content-Type': 'application/json',
   },
