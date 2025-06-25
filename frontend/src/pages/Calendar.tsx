@@ -15,6 +15,7 @@ import { fetchReminders } from '../api/reminders';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { normalizeDate, toBackendDate } from '../utils/dateUtils';
 import { FullCalendarStyles } from '../theme/FullCalendarStyles';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 const Calendar = () => {
   const { isAuthenticated } = useAuth();
@@ -259,6 +260,7 @@ const Calendar = () => {
   });
 
   return (
+  <ErrorBoundary>
     <Box sx={{ p: 3 }}>
       {/* Add FullCalendarStyles component here */}
       <FullCalendarStyles />
@@ -330,6 +332,7 @@ const Calendar = () => {
         onClose={closeNotification}
       />
     </Box>
+  </ErrorBoundary>
   );
 };
 
