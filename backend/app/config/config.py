@@ -18,6 +18,9 @@ class Config:
     SQLALCHEMY_POOL_RECYCLE = 1800
     SQLALCHEMY_MAX_OVERFLOW = 20
 
+    # CORS configuration - allow requests from frontend
+    CORS_ORIGINS = os.getenv('FRONTEND_URL', '*').split(',')
+
 
 class DevelopmentConfig(Config):
     DEBUG = True
@@ -35,9 +38,17 @@ class TestingConfig(Config):
 
 class ProductionConfig(Config):
     DEBUG = False
-    # Use PostgreSQL for production
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'postgresql://user:password@localhost/calendar_app')
+    # Handle Render's DATABASE_URL format (postgres:// → postgresql://)
+    database_url = os.getenv('DATABASE_URL', 'postgresql://user:password@localhost/calendar_app')
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    SQLALCHEMY_DATABASE_URI = database_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # Adjust pool settings for Render's environment
+    SQLALCHEMY_POOL_SIZE = int(os.getenv('POOL_SIZE', '5'))
+    SQLALCHEMY_MAX_OVERFLOW = int(os.getenv('POOL_MAX_OVERFLOW', '10'))
 
 
 config_by_name = dict(
