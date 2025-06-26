@@ -27,8 +27,6 @@ class DevelopmentConfig(Config):
     # Check if we should use PostgreSQL for development
     if os.getenv('USE_POSTGRES_DEV') == 'true':
         database_url = os.getenv('DATABASE_URL', 'postgresql://postgres:ayush@localhost:5432/calendar_app')
-        if database_url.startswith("postgres://"):
-            database_url = database_url.replace("postgres://", "postgresql://", 1)
         SQLALCHEMY_DATABASE_URI = database_url
     else:
         SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, '../../../development.db')
@@ -48,8 +46,6 @@ class ProductionConfig(Config):
     DEBUG = False
     # Handle Render's DATABASE_URL format (postgres:// → postgresql://)
     database_url = os.getenv('DATABASE_URL', 'postgresql://user:password@localhost/calendar_app')
-    if database_url.startswith("postgres://"):
-        database_url = database_url.replace("postgres://", "postgresql://", 1)
 
     SQLALCHEMY_DATABASE_URI = database_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
