@@ -46,17 +46,20 @@ class TestingConfig(Config):
 
 class ProductionConfig(Config):
     DEBUG = False
-    # Handle Render's DATABASE_URL format (postgres:// → postgresql://)
+    # Get database URL from environment variable
     database_url = os.getenv('DATABASE_URL', 'postgresql://user:password@localhost/calendar_app')
+
+    # Format correction for older style URLs
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
+    # Add psycopg dialect if using psycopg3
+    if not '+psycopg' in database_url and 'postgresql://' in database_url:
+        parts = database_url.split('://', 1)
+        database_url = f"{parts[0]}+psycopg://{parts[1]}"
+
     SQLALCHEMY_DATABASE_URI = database_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-
-    # Adjust pool settings for Render's environment
-    SQLALCHEMY_POOL_SIZE = int(os.getenv('POOL_SIZE', '5'))
-    SQLALCHEMY_MAX_OVERFLOW = int(os.getenv('POOL_MAX_OVERFLOW', '10'))
 
 
 config_by_name = dict(

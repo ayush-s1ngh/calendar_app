@@ -8,7 +8,8 @@ Flask-Cors==4.0.0
 
 # Database
 SQLAlchemy
-psycopg2-binary==2.9.9  # For PostgreSQL in production
+# Replace the incompatible psycopg2-binary with:
+psycopg>=3.1.12
 
 # Scheduling and background tasks
 APScheduler==3.10.4
