@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from .. import scheduler, db, create_app
 from ..models import Reminder, Event, User
 from .logger import logger
+import os
 
 
 def check_reminders():
@@ -10,7 +11,12 @@ def check_reminders():
     This function will be called periodically by the scheduler
     """
     try:
-        app = create_app()
+        # Get environment from FLASK_ENV or default to development
+        env = os.getenv('FLASK_ENV', 'development')
+
+        # Create app with the same configuration as main app
+        app = create_app(env)
+
         # Create and activate an application context
         with app.app_context():
             # Get current time
