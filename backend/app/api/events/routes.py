@@ -4,38 +4,141 @@ from datetime import datetime, timezone
 
 from ... import db
 from . import events_bp
-from ...models import Event
+from ...models import Event, Category, RecurrenceRule
 from ...utils.responses import success_response, error_response
 from ...utils.validators import validate_datetime_string
+from ...utils.pagination import paginate_query
+from ...utils.recurrence import RecurrenceGenerator
+from ...utils.error_handler import handle_validation_errors, handle_database_errors, log_request_info
 from ...utils.logger import logger
+
 
 @events_bp.route('', methods=['GET'])
 @jwt_required()
+@log_request_info
 def get_all_events():
     """
-    Get all events for the logged-in user
+    Get all events for the logged-in user with filtering and pagination
+
+    Query Parameters:
+    - page: Page number (default: 1)
+    - per_page: Items per page (default: 50, max: 100)
+    - category_id: Filter by category ID
+    - start_date: Filter events starting from this date (ISO format)
+    - end_date: Filter events up to this date (ISO format)
+    - include_recurring: Include recurring event instances (default: true)
+    - search: Search in title and description
 
     Returns:
-    - Success response with list of events
+    - Success response with list of events and pagination info
     """
     try:
-        events = Event.query.filter_by(user_id=current_user.id).all()
+        # Build base query
+        query = Event.query.filter_by(user_id=current_user.id)
 
+        # Apply filters
+        category_id = request.args.get('category_id', type=int)
+        if category_id:
+            query = query.join(Event.categories).filter(Category.id == category_id)
+
+        start_date = request.args.get('start_date')
+        if start_date:
+            is_valid, start_dt = validate_datetime_string(start_date)
+            if is_valid:
+                query = query.filter(Event.start_datetime >= start_dt)
+
+        end_date = request.args.get('end_date')
+        if end_date:
+            is_valid, end_dt = validate_datetime_string(end_date)
+            if is_valid:
+                query = query.filter(Event.start_datetime <= end_dt)
+
+        search = request.args.get('search', '').strip()
+        if search:
+            search_filter = f"%{search}%"
+            query = query.filter(
+                db.or_(
+                    Event.title.ilike(search_filter),
+                    Event.description.ilike(search_filter)
+                )
+            )
+
+        # Order by start datetime
+        query = query.order_by(Event.start_datetime.desc())
+
+        # Handle pagination
+        page = request.args.get('page', type=int)
+        per_page = request.args.get('per_page', type=int)
+        include_recurring = request.args.get('include_recurring', 'true').lower() == 'true'
+
+        if page or per_page:
+            result = paginate_query(query, page, per_page, max_per_page=100)
+            events = result['items']
+            pagination_info = result['pagination']
+        else:
+            events = query.all()
+            pagination_info = None
+
+        # Process events and expand recurring ones if requested
         events_data = []
-        for event in events:
-            events_data.append({
-                "id": event.id,
-                "title": event.title,
-                "description": event.description,
-                "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-                "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
-                "is_all_day": event.is_all_day,
-                "color": event.color,
-                "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-                "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
-            })
 
-        return success_response(data=events_data)
+        for event in events:
+            if event.is_recurring and include_recurring and event.recurrence_rule:
+                # Generate recurring instances
+                start_range = datetime.utcnow()
+                end_range = start_range.replace(year=start_range.year + 1)  # Next year
+
+                occurrences = RecurrenceGenerator.generate_occurrences(
+                    event, event.recurrence_rule, start_range, end_range
+                )
+
+                for occurrence in occurrences:
+                    occurrence_data = occurrence.copy()
+                    # Format datetime fields
+                    if isinstance(occurrence_data['start_datetime'], datetime):
+                        occurrence_data['start_datetime'] = occurrence_data['start_datetime'].replace(
+                            tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+                    if occurrence_data['end_datetime'] and isinstance(occurrence_data['end_datetime'], datetime):
+                        occurrence_data['end_datetime'] = occurrence_data['end_datetime'].replace(
+                            tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+                    if isinstance(occurrence_data['created_at'], datetime):
+                        occurrence_data['created_at'] = occurrence_data['created_at'].replace(
+                            tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+                    if isinstance(occurrence_data['updated_at'], datetime):
+                        occurrence_data['updated_at'] = occurrence_data['updated_at'].replace(
+                            tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+
+                    events_data.append(occurrence_data)
+            else:
+                # Regular event or recurring event master
+                event_data = {
+                    "id": event.id,
+                    "title": event.title,
+                    "description": event.description,
+                    "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
+                                                                                                            'Z'),
+                    "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
+                                                                                                        'Z') if event.end_datetime else None,
+                    "is_all_day": event.is_all_day,
+                    "color": event.color,
+                    "is_recurring": event.is_recurring,
+                    "recurrence_id": event.recurrence_id,
+                    "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                    "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                    "categories": [cat.to_dict() for cat in event.categories]
+                }
+
+                if event.recurrence_rule:
+                    event_data["recurrence_rule"] = event.recurrence_rule.to_dict()
+
+                events_data.append(event_data)
+
+        # Prepare response
+        response_data = {"events": events_data}
+        if pagination_info:
+            response_data["pagination"] = pagination_info
+
+        return success_response(data=response_data)
 
     except Exception as e:
         logger.error(f"Error retrieving events: {str(e)}")
@@ -44,9 +147,10 @@ def get_all_events():
 
 @events_bp.route('/<int:event_id>', methods=['GET'])
 @jwt_required()
+@log_request_info
 def get_event(event_id):
     """
-    Get a specific event
+    Get a specific event with full details
 
     Parameters:
     - event_id: ID of the event
@@ -65,12 +169,19 @@ def get_event(event_id):
             "title": event.title,
             "description": event.description,
             "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
+                                                                                                'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
+            "is_recurring": event.is_recurring,
+            "recurrence_id": event.recurrence_id,
             "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "categories": [cat.to_dict() for cat in event.categories]
         }
+
+        if event.recurrence_rule:
+            event_data["recurrence_rule"] = event.recurrence_rule.to_dict()
 
         return success_response(data=event_data)
 
@@ -81,6 +192,9 @@ def get_event(event_id):
 
 @events_bp.route('', methods=['POST'])
 @jwt_required()
+@handle_validation_errors
+@handle_database_errors
+@log_request_info
 def create_event():
     """
     Create a new event
@@ -92,6 +206,8 @@ def create_event():
     - end_datetime: (optional) Event end datetime (ISO format)
     - is_all_day: (optional) Boolean indicating all-day event
     - color: (optional) Event color
+    - category_ids: (optional) List of category IDs to assign
+    - recurrence_rule: (optional) Recurrence rule object
 
     Returns:
     - Success response with created event details
@@ -105,13 +221,14 @@ def create_event():
         # Required fields
         title = data.get('title')
         start_datetime_str = data.get('start_datetime')
-        print("start datetime in backend : ", start_datetime_str)
 
         # Optional fields
         description = data.get('description')
         end_datetime_str = data.get('end_datetime')
         is_all_day = data.get('is_all_day', False)
         color = data.get('color', 'blue')
+        category_ids = data.get('category_ids', [])
+        recurrence_rule_data = data.get('recurrence_rule')
 
         # Validate required fields
         if not title:
@@ -120,18 +237,41 @@ def create_event():
         # Validate start_datetime
         is_valid, start_dt_obj = validate_datetime_string(start_datetime_str)
         if not is_valid:
-            return error_response(start_dt_obj, 400)  # start_dt_obj contains error message
+            return error_response(start_dt_obj, 400)
 
         # Validate end_datetime if provided
         end_dt_obj = None
         if end_datetime_str:
             is_valid, end_dt_obj = validate_datetime_string(end_datetime_str)
             if not is_valid:
-                return error_response(end_dt_obj, 400)  # end_dt_obj contains error message
+                return error_response(end_dt_obj, 400)
 
-            # Ensure end datetime is after start datetime
             if end_dt_obj <= start_dt_obj:
                 return error_response("End datetime must be after start datetime", 400)
+
+        # Validate categories
+        categories = []
+        if category_ids:
+            categories = Category.query.filter(
+                Category.id.in_(category_ids),
+                Category.user_id == current_user.id
+            ).all()
+
+            if len(categories) != len(category_ids):
+                return error_response("One or more categories not found", 400)
+
+        # Validate recurrence rule if provided
+        recurrence_rule = None
+        is_recurring = False
+        recurrence_id = None
+
+        if recurrence_rule_data:
+            validation_errors = RecurrenceGenerator.validate_recurrence_rule(recurrence_rule_data)
+            if validation_errors:
+                return error_response("Invalid recurrence rule", 400, errors=validation_errors)
+
+            is_recurring = True
+            recurrence_id = RecurrenceGenerator.generate_recurrence_id()
 
         # Create new event
         new_event = Event(
@@ -141,11 +281,36 @@ def create_event():
             start_datetime=start_dt_obj,
             end_datetime=end_dt_obj,
             is_all_day=is_all_day,
-            color=color
+            color=color,
+            is_recurring=is_recurring,
+            recurrence_id=recurrence_id
         )
 
-        # Save to database
+        # Add categories
+        new_event.categories = categories
+
+        # Save event first to get ID
         db.session.add(new_event)
+        db.session.flush()  # Get the ID without committing
+
+        # Create recurrence rule if provided
+        if recurrence_rule_data:
+            recurrence_rule = RecurrenceRule(
+                event_id=new_event.id,
+                frequency=recurrence_rule_data['frequency'],
+                interval=recurrence_rule_data.get('interval', 1),
+                days_of_week=','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get(
+                    'days_of_week') else None,
+                day_of_month=recurrence_rule_data.get('day_of_month'),
+                week_of_month=recurrence_rule_data.get('week_of_month'),
+                day_of_week=recurrence_rule_data.get('day_of_week'),
+                end_date=validate_datetime_string(recurrence_rule_data['end_date'])[1] if recurrence_rule_data.get(
+                    'end_date') else None,
+                occurrence_count=recurrence_rule_data.get('occurrence_count')
+            )
+            db.session.add(recurrence_rule)
+
+        # Commit all changes
         db.session.commit()
 
         # Return created event
@@ -154,12 +319,19 @@ def create_event():
             "title": new_event.title,
             "description": new_event.description,
             "start_datetime": new_event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": new_event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if new_event.end_datetime else None,
+            "end_datetime": new_event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
+                                                                                                    'Z') if new_event.end_datetime else None,
             "is_all_day": new_event.is_all_day,
             "color": new_event.color,
+            "is_recurring": new_event.is_recurring,
+            "recurrence_id": new_event.recurrence_id,
             "created_at": new_event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "updated_at": new_event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+            "updated_at": new_event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "categories": [cat.to_dict() for cat in new_event.categories]
         }
+
+        if recurrence_rule:
+            event_data["recurrence_rule"] = recurrence_rule.to_dict()
 
         logger.info(f"Event created: {new_event.id} by user {current_user.username}")
         return success_response(data=event_data, message="Event created successfully", status_code=201)
@@ -172,6 +344,9 @@ def create_event():
 
 @events_bp.route('/<int:event_id>', methods=['PUT'])
 @jwt_required()
+@handle_validation_errors
+@handle_database_errors
+@log_request_info
 def update_event(event_id):
     """
     Update an event
@@ -186,6 +361,8 @@ def update_event(event_id):
     - end_datetime: (optional) Event end datetime (ISO format)
     - is_all_day: (optional) Boolean indicating all-day event
     - color: (optional) Event color
+    - category_ids: (optional) List of category IDs to assign
+    - recurrence_rule: (optional) Recurrence rule object
 
     Returns:
     - Success response with updated event details
@@ -249,10 +426,81 @@ def update_event(event_id):
         if 'color' in data:
             updates['color'] = data['color']
 
+        # Update categories if provided
+        if 'category_ids' in data:
+            category_ids = data['category_ids']
+            if category_ids:
+                categories = Category.query.filter(
+                    Category.id.in_(category_ids),
+                    Category.user_id == current_user.id
+                ).all()
+
+                if len(categories) != len(category_ids):
+                    return error_response("One or more categories not found", 400)
+
+                event.categories = categories
+            else:
+                event.categories = []
+
+        # Handle recurrence rule updates
+        if 'recurrence_rule' in data:
+            recurrence_rule_data = data['recurrence_rule']
+
+            if recurrence_rule_data:
+                # Validate new recurrence rule
+                validation_errors = RecurrenceGenerator.validate_recurrence_rule(recurrence_rule_data)
+                if validation_errors:
+                    return error_response("Invalid recurrence rule", 400, errors=validation_errors)
+
+                # Update or create recurrence rule
+                if event.recurrence_rule:
+                    # Update existing rule
+                    rule = event.recurrence_rule
+                    rule.frequency = recurrence_rule_data['frequency']
+                    rule.interval = recurrence_rule_data.get('interval', 1)
+                    rule.days_of_week = ','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get(
+                        'days_of_week') else None
+                    rule.day_of_month = recurrence_rule_data.get('day_of_month')
+                    rule.week_of_month = recurrence_rule_data.get('week_of_month')
+                    rule.day_of_week = recurrence_rule_data.get('day_of_week')
+                    rule.end_date = validate_datetime_string(recurrence_rule_data['end_date'])[
+                        1] if recurrence_rule_data.get('end_date') else None
+                    rule.occurrence_count = recurrence_rule_data.get('occurrence_count')
+                    rule.updated_at = datetime.utcnow()
+                else:
+                    # Create new rule
+                    new_rule = RecurrenceRule(
+                        event_id=event.id,
+                        frequency=recurrence_rule_data['frequency'],
+                        interval=recurrence_rule_data.get('interval', 1),
+                        days_of_week=','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get(
+                            'days_of_week') else None,
+                        day_of_month=recurrence_rule_data.get('day_of_month'),
+                        week_of_month=recurrence_rule_data.get('week_of_month'),
+                        day_of_week=recurrence_rule_data.get('day_of_week'),
+                        end_date=validate_datetime_string(recurrence_rule_data['end_date'])[
+                            1] if recurrence_rule_data.get('end_date') else None,
+                        occurrence_count=recurrence_rule_data.get('occurrence_count')
+                    )
+                    db.session.add(new_rule)
+
+                    # Generate recurrence ID if not exists
+                    if not event.recurrence_id:
+                        updates['recurrence_id'] = RecurrenceGenerator.generate_recurrence_id()
+
+                updates['is_recurring'] = True
+            else:
+                # Remove recurrence rule
+                if event.recurrence_rule:
+                    db.session.delete(event.recurrence_rule)
+                updates['is_recurring'] = False
+                updates['recurrence_id'] = None
+
         # Apply updates
         for key, value in updates.items():
             setattr(event, key, value)
 
+        event.updated_at = datetime.utcnow()
         db.session.commit()
 
         # Return updated event
@@ -261,12 +509,19 @@ def update_event(event_id):
             "title": event.title,
             "description": event.description,
             "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
+                                                                                                'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
+            "is_recurring": event.is_recurring,
+            "recurrence_id": event.recurrence_id,
             "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "categories": [cat.to_dict() for cat in event.categories]
         }
+
+        if event.recurrence_rule:
+            event_data["recurrence_rule"] = event.recurrence_rule.to_dict()
 
         logger.info(f"Event {event_id} updated by user {current_user.username}")
         return success_response(data=event_data, message="Event updated successfully")
@@ -279,6 +534,8 @@ def update_event(event_id):
 
 @events_bp.route('/<int:event_id>', methods=['DELETE'])
 @jwt_required()
+@handle_database_errors
+@log_request_info
 def delete_event(event_id):
     """
     Delete an event
@@ -295,10 +552,11 @@ def delete_event(event_id):
         if not event:
             return error_response("Event not found", 404)
 
+        event_title = event.title
         db.session.delete(event)
         db.session.commit()
 
-        logger.info(f"Event {event_id} deleted by user {current_user.username}")
+        logger.info(f"Event {event_id} ({event_title}) deleted by user {current_user.username}")
         return success_response(message="Event deleted successfully")
 
     except Exception as e:
@@ -309,6 +567,9 @@ def delete_event(event_id):
 
 @events_bp.route('/<int:event_id>/move', methods=['PUT'])
 @jwt_required()
+@handle_validation_errors
+@handle_database_errors
+@log_request_info
 def move_event(event_id):
     """
     Update event dates (for drag and drop functionality)
@@ -368,6 +629,7 @@ def move_event(event_id):
             duration = event.end_datetime - event.start_datetime
             event.end_datetime = start_dt_obj + duration
 
+        event.updated_at = datetime.utcnow()
         db.session.commit()
 
         # Return updated event
@@ -376,12 +638,19 @@ def move_event(event_id):
             "title": event.title,
             "description": event.description,
             "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
+                                                                                                'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
+            "is_recurring": event.is_recurring,
+            "recurrence_id": event.recurrence_id,
             "created_at": event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z')
+            "updated_at": event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "categories": [cat.to_dict() for cat in event.categories]
         }
+
+        if event.recurrence_rule:
+            event_data["recurrence_rule"] = event.recurrence_rule.to_dict()
 
         logger.info(f"Event {event_id} moved by user {current_user.username}")
         return success_response(data=event_data, message="Event moved successfully")
@@ -390,3 +659,68 @@ def move_event(event_id):
         logger.error(f"Error moving event {event_id}: {str(e)}")
         db.session.rollback()
         return error_response("An error occurred while moving the event", 500)
+
+
+@events_bp.route('/bulk-delete', methods=['DELETE'])
+@jwt_required()
+@handle_database_errors
+@log_request_info
+def bulk_delete_events():
+    """
+    Delete multiple events at once
+
+    Request body:
+    - event_ids: List of event IDs to delete
+
+    Returns:
+    - Success response with deletion summary
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'event_ids' not in data:
+            return error_response("Event IDs are required", 400)
+
+        event_ids = data['event_ids']
+
+        if not isinstance(event_ids, list) or not event_ids:
+            return error_response("Event IDs must be a non-empty list", 400)
+
+        # Find events that belong to the current user
+        events = Event.query.filter(
+            Event.id.in_(event_ids),
+            Event.user_id == current_user.id
+        ).all()
+
+        if not events:
+            return error_response("No events found to delete", 404)
+
+        # Check if all requested events were found
+        found_ids = [event.id for event in events]
+        not_found_ids = [id for id in event_ids if id not in found_ids]
+
+        # Delete found events
+        deleted_count = len(events)
+        for event in events:
+            db.session.delete(event)
+
+        db.session.commit()
+
+        response_data = {
+            "deleted_count": deleted_count,
+            "deleted_ids": found_ids
+        }
+
+        if not_found_ids:
+            response_data["not_found_ids"] = not_found_ids
+
+        logger.info(f"Bulk deleted {deleted_count} events by user {current_user.username}")
+        return success_response(
+            data=response_data,
+            message=f"Successfully deleted {deleted_count} event(s)"
+        )
+
+    except Exception as e:
+        logger.error(f"Error in bulk delete events: {str(e)}")
+        db.session.rollback()
+        return error_response("An error occurred while deleting events", 500)
