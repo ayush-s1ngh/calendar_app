@@ -25,16 +25,22 @@ def create_app(config_name='development'):
     migrate.init_app(app, db)
     jwt.init_app(app)
 
+    # Register error handlers
+    from .utils.error_handler import register_error_handlers
+    register_error_handlers(app)
+
     # Register blueprints
     from .api.events import events_bp
     from .api.reminders import reminders_bp
     from .api.users import users_bp
+    from .api.categories import categories_bp
     from .auth import auth_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(users_bp, url_prefix='/api/users')
     app.register_blueprint(events_bp, url_prefix='/api/events')
     app.register_blueprint(reminders_bp, url_prefix='/api/reminders')
+    app.register_blueprint(categories_bp, url_prefix='/api/categories')
 
     # Initialize scheduler
     if not scheduler.running:
