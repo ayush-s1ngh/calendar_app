@@ -22,9 +22,10 @@ const LoginForm: React.FC = () => {
       password: '',
     },
     validationSchema,
-    onSubmit: async (values) => {
+    onSubmit: async (values, { setSubmitting }) => {
       try {
         const response = await login(values);
+        setSubmitting(false);
         if (response.success && response.data) {
           setAuthTokens(response.data.tokens);
           setUser(response.data.user);
@@ -33,19 +34,25 @@ const LoginForm: React.FC = () => {
           setError(response.message || 'Login failed');
         }
       } catch (error: any) {
-        setError(error.response?.data?.message || 'An error occurred during login');
+        setSubmitting(false);
+        const errorMessage = error.response?.data?.message ||
+          (error.message ? error.message : 'Network error or server unavailable');
+        setError(errorMessage);
+        console.error('Login error in Brave:', error); // Specific logging for debugging
+        // Prevent any default navigation by staying on current route
+      } finally {
+        setSubmitting(false);
       }
     },
   });
 
   return (
-    <Box component="form" onSubmit={formik.handleSubmit} sx={{ width: '100%', mt: 2 }}>
+    <Box component="form" onSubmit={(e) => { e.preventDefault(); formik.handleSubmit(e); }} sx={{ width: '100%', mt: 2 }}>
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
         </Alert>
       )}
-
       <TextField
         fullWidth
         id="username"
@@ -58,7 +65,6 @@ const LoginForm: React.FC = () => {
         error={formik.touched.username && Boolean(formik.errors.username)}
         helperText={formik.touched.username && formik.errors.username}
       />
-
       <TextField
         fullWidth
         id="password"
@@ -72,7 +78,6 @@ const LoginForm: React.FC = () => {
         error={formik.touched.password && Boolean(formik.errors.password)}
         helperText={formik.touched.password && formik.errors.password}
       />
-
       <Button
         type="submit"
         fullWidth
@@ -84,7 +89,6 @@ const LoginForm: React.FC = () => {
       >
         {formik.isSubmitting ? 'Logging in...' : 'Login'}
       </Button>
-
       <Typography variant="body2" align="center">
         Don't have an account?{' '}
         <Typography
