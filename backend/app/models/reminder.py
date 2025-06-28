@@ -1,5 +1,5 @@
 from datetime import datetime
-from app import db
+from .. import db
 
 class Reminder(db.Model):
     __tablename__ = 'reminders'
