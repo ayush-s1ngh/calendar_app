@@ -4,3 +4,6 @@ from .reminder import Reminder
 from .category import Category
 from .recurrence_rule import RecurrenceRule
 from .event_category import event_categories
+from .email_verification_token import EmailVerificationToken
+from .password_reset_token import PasswordResetToken
+from .oauth_account import OAuthAccount
