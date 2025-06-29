@@ -1,14 +1,15 @@
 from flask import request
 from flask_jwt_extended import jwt_required, current_user
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from ... import db
 from . import events_bp
-from ...models import Event, Category, RecurrenceRule
+from ...models import Event, Category, RecurrenceRule, Reminder
 from ...utils.responses import success_response, error_response
 from ...utils.validators import validate_datetime_string
 from ...utils.pagination import paginate_query
 from ...utils.recurrence import RecurrenceGenerator
+from ...utils.rate_limiter import rate_limit
 from ...utils.error_handler import handle_validation_errors, handle_database_errors, log_request_info
 from ...utils.logger import logger
 
@@ -115,10 +116,8 @@ def get_all_events():
                     "id": event.id,
                     "title": event.title,
                     "description": event.description,
-                    "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
-                                                                                                            'Z'),
-                    "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
-                                                                                                        'Z') if event.end_datetime else None,
+                    "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                    "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
                     "is_all_day": event.is_all_day,
                     "color": event.color,
                     "is_recurring": event.is_recurring,
@@ -169,8 +168,7 @@ def get_event(event_id):
             "title": event.title,
             "description": event.description,
             "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
-                                                                                                'Z') if event.end_datetime else None,
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
             "is_recurring": event.is_recurring,
@@ -192,12 +190,13 @@ def get_event(event_id):
 
 @events_bp.route('', methods=['POST'])
 @jwt_required()
+@rate_limit(limit=30, window=300)  # 30 event creations per 5 minutes
 @handle_validation_errors
 @handle_database_errors
 @log_request_info
 def create_event():
     """
-    Create a new event
+    Create a new event with optional reminders
 
     Request body:
     - title: Event title
@@ -208,6 +207,7 @@ def create_event():
     - color: (optional) Event color
     - category_ids: (optional) List of category IDs to assign
     - recurrence_rule: (optional) Recurrence rule object
+    - reminders: (optional) List of reminder objects
 
     Returns:
     - Success response with created event details
@@ -229,6 +229,7 @@ def create_event():
         color = data.get('color', 'blue')
         category_ids = data.get('category_ids', [])
         recurrence_rule_data = data.get('recurrence_rule')
+        reminders_data = data.get('reminders', [])
 
         # Validate required fields
         if not title:
@@ -273,6 +274,61 @@ def create_event():
             is_recurring = True
             recurrence_id = RecurrenceGenerator.generate_recurrence_id()
 
+        # Validate reminders if provided
+        validated_reminders = []
+        if reminders_data:
+            if not isinstance(reminders_data, list):
+                return error_response("Reminders must be a list", 400)
+
+            if len(reminders_data) > 10:  # Limit reminders per event
+                return error_response("Cannot create more than 10 reminders per event", 400)
+
+            for idx, reminder_data in enumerate(reminders_data):
+                try:
+                    reminder_time_str = reminder_data.get('reminder_time')
+                    minutes_before = reminder_data.get('minutes_before')
+                    notification_type = reminder_data.get('notification_type', 'email')
+
+                    if not reminder_time_str and minutes_before is None:
+                        return error_response(f"Reminder {idx + 1}: Either reminder_time or minutes_before must be provided", 400)
+
+                    if reminder_time_str and minutes_before is not None:
+                        return error_response(f"Reminder {idx + 1}: Cannot specify both reminder_time and minutes_before", 400)
+
+                    # Calculate reminder time
+                    if minutes_before is not None:
+                        if not isinstance(minutes_before, int) or minutes_before < 0:
+                            return error_response(f"Reminder {idx + 1}: minutes_before must be a non-negative integer", 400)
+
+                        reminder_time_obj = start_dt_obj - timedelta(minutes=minutes_before)
+                        if reminder_time_obj <= datetime.utcnow():
+                            return error_response(f"Reminder {idx + 1}: Calculated reminder time cannot be in the past", 400)
+
+                        is_relative = True
+                    else:
+                        is_valid, reminder_time_obj = validate_datetime_string(reminder_time_str)
+                        if not is_valid:
+                            return error_response(f"Reminder {idx + 1}: {reminder_time_obj}", 400)
+
+                        if reminder_time_obj <= datetime.utcnow():
+                            return error_response(f"Reminder {idx + 1}: Reminder time cannot be in the past", 400)
+
+                        if reminder_time_obj >= start_dt_obj:
+                            return error_response(f"Reminder {idx + 1}: Reminder time must be before event start time", 400)
+
+                        is_relative = False
+                        minutes_before = None
+
+                    validated_reminders.append({
+                        'reminder_time': reminder_time_obj,
+                        'notification_type': notification_type,
+                        'minutes_before': minutes_before,
+                        'is_relative': is_relative
+                    })
+
+                except Exception as e:
+                    return error_response(f"Reminder {idx + 1}: {str(e)}", 400)
+
         # Create new event
         new_event = Event(
             user_id=current_user.id,
@@ -299,41 +355,62 @@ def create_event():
                 event_id=new_event.id,
                 frequency=recurrence_rule_data['frequency'],
                 interval=recurrence_rule_data.get('interval', 1),
-                days_of_week=','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get(
-                    'days_of_week') else None,
+                days_of_week=','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get('days_of_week') else None,
                 day_of_month=recurrence_rule_data.get('day_of_month'),
                 week_of_month=recurrence_rule_data.get('week_of_month'),
                 day_of_week=recurrence_rule_data.get('day_of_week'),
-                end_date=validate_datetime_string(recurrence_rule_data['end_date'])[1] if recurrence_rule_data.get(
-                    'end_date') else None,
+                end_date=validate_datetime_string(recurrence_rule_data['end_date'])[1] if recurrence_rule_data.get('end_date') else None,
                 occurrence_count=recurrence_rule_data.get('occurrence_count')
             )
             db.session.add(recurrence_rule)
 
+        # Create reminders if provided
+        created_reminders = []
+        for reminder_data in validated_reminders:
+            reminder = Reminder(
+                event_id=new_event.id,
+                reminder_time=reminder_data['reminder_time'],
+                notification_sent=False,
+                notification_type=reminder_data['notification_type'],
+                minutes_before=reminder_data['minutes_before'],
+                is_relative=reminder_data['is_relative']
+            )
+            db.session.add(reminder)
+            created_reminders.append(reminder)
+
         # Commit all changes
         db.session.commit()
 
-        # Return created event
+        # Return created event with reminders
         event_data = {
             "id": new_event.id,
             "title": new_event.title,
             "description": new_event.description,
             "start_datetime": new_event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": new_event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
-                                                                                                    'Z') if new_event.end_datetime else None,
+            "end_datetime": new_event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if new_event.end_datetime else None,
             "is_all_day": new_event.is_all_day,
             "color": new_event.color,
             "is_recurring": new_event.is_recurring,
             "recurrence_id": new_event.recurrence_id,
             "created_at": new_event.created_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
             "updated_at": new_event.updated_at.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "categories": [cat.to_dict() for cat in new_event.categories]
+            "categories": [cat.to_dict() for cat in new_event.categories],
+            "reminders": [
+                {
+                    "id": reminder.id,
+                    "reminder_time": reminder.reminder_time.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                    "notification_type": reminder.notification_type,
+                    "minutes_before": reminder.minutes_before,
+                    "is_relative": reminder.is_relative
+                }
+                for reminder in created_reminders
+            ]
         }
 
         if recurrence_rule:
             event_data["recurrence_rule"] = recurrence_rule.to_dict()
 
-        logger.info(f"Event created: {new_event.id} by user {current_user.username}")
+        logger.info(f"Event created with {len(created_reminders)} reminders: {new_event.id} by user {current_user.username}")
         return success_response(data=event_data, message="Event created successfully", status_code=201)
 
     except Exception as e:
@@ -458,13 +535,11 @@ def update_event(event_id):
                     rule = event.recurrence_rule
                     rule.frequency = recurrence_rule_data['frequency']
                     rule.interval = recurrence_rule_data.get('interval', 1)
-                    rule.days_of_week = ','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get(
-                        'days_of_week') else None
+                    rule.days_of_week = ','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get('days_of_week') else None
                     rule.day_of_month = recurrence_rule_data.get('day_of_month')
                     rule.week_of_month = recurrence_rule_data.get('week_of_month')
                     rule.day_of_week = recurrence_rule_data.get('day_of_week')
-                    rule.end_date = validate_datetime_string(recurrence_rule_data['end_date'])[
-                        1] if recurrence_rule_data.get('end_date') else None
+                    rule.end_date = validate_datetime_string(recurrence_rule_data['end_date'])[1] if recurrence_rule_data.get('end_date') else None
                     rule.occurrence_count = recurrence_rule_data.get('occurrence_count')
                     rule.updated_at = datetime.utcnow()
                 else:
@@ -473,13 +548,11 @@ def update_event(event_id):
                         event_id=event.id,
                         frequency=recurrence_rule_data['frequency'],
                         interval=recurrence_rule_data.get('interval', 1),
-                        days_of_week=','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get(
-                            'days_of_week') else None,
+                        days_of_week=','.join(recurrence_rule_data['days_of_week']) if recurrence_rule_data.get('days_of_week') else None,
                         day_of_month=recurrence_rule_data.get('day_of_month'),
                         week_of_month=recurrence_rule_data.get('week_of_month'),
                         day_of_week=recurrence_rule_data.get('day_of_week'),
-                        end_date=validate_datetime_string(recurrence_rule_data['end_date'])[
-                            1] if recurrence_rule_data.get('end_date') else None,
+                        end_date=validate_datetime_string(recurrence_rule_data['end_date'])[1] if recurrence_rule_data.get('end_date') else None,
                         occurrence_count=recurrence_rule_data.get('occurrence_count')
                     )
                     db.session.add(new_rule)
@@ -501,6 +574,17 @@ def update_event(event_id):
             setattr(event, key, value)
 
         event.updated_at = datetime.utcnow()
+
+        # Update relative reminders if start_datetime changed
+        if 'start_datetime' in updates:
+            relative_reminders = Reminder.query.filter_by(event_id=event.id, is_relative=True).all()
+            for reminder in relative_reminders:
+                if reminder.minutes_before is not None:
+                    new_reminder_time = updates['start_datetime'] - timedelta(minutes=reminder.minutes_before)
+                    if new_reminder_time > datetime.utcnow():  # Only update if not in the past
+                        reminder.reminder_time = new_reminder_time
+                        reminder.updated_at = datetime.utcnow()
+
         db.session.commit()
 
         # Return updated event
@@ -509,8 +593,7 @@ def update_event(event_id):
             "title": event.title,
             "description": event.description,
             "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
-                                                                                                'Z') if event.end_datetime else None,
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
             "is_recurring": event.is_recurring,
@@ -607,6 +690,7 @@ def move_event(event_id):
             return error_response(start_dt_obj, 400)
 
         # Update start datetime
+        old_start = event.start_datetime
         event.start_datetime = start_dt_obj
 
         # Update end datetime if provided
@@ -626,8 +710,17 @@ def move_event(event_id):
                 event.end_datetime = end_dt_obj
         elif event.end_datetime:
             # If end datetime not provided but exists, adjust it to maintain the same duration
-            duration = event.end_datetime - event.start_datetime
+            duration = event.end_datetime - old_start
             event.end_datetime = start_dt_obj + duration
+
+        # Update relative reminders
+        relative_reminders = Reminder.query.filter_by(event_id=event.id, is_relative=True).all()
+        for reminder in relative_reminders:
+            if reminder.minutes_before is not None:
+                new_reminder_time = start_dt_obj - timedelta(minutes=reminder.minutes_before)
+                if new_reminder_time > datetime.utcnow():  # Only update if not in the past
+                    reminder.reminder_time = new_reminder_time
+                    reminder.updated_at = datetime.utcnow()
 
         event.updated_at = datetime.utcnow()
         db.session.commit()
@@ -638,8 +731,7 @@ def move_event(event_id):
             "title": event.title,
             "description": event.description,
             "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00',
-                                                                                                'Z') if event.end_datetime else None,
+            "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
             "is_all_day": event.is_all_day,
             "color": event.color,
             "is_recurring": event.is_recurring,
@@ -663,6 +755,7 @@ def move_event(event_id):
 
 @events_bp.route('/bulk-delete', methods=['DELETE'])
 @jwt_required()
+@rate_limit(limit=10, window=300)  # 10 bulk operations per 5 minutes
 @handle_database_errors
 @log_request_info
 def bulk_delete_events():
@@ -724,3 +817,240 @@ def bulk_delete_events():
         logger.error(f"Error in bulk delete events: {str(e)}")
         db.session.rollback()
         return error_response("An error occurred while deleting events", 500)
+
+
+@events_bp.route('/bulk/move', methods=['PUT'])
+@jwt_required()
+@rate_limit(limit=10, window=300)  # 10 bulk operations per 5 minutes
+@handle_validation_errors
+@handle_database_errors
+@log_request_info
+def bulk_move_events():
+    """
+    Move multiple events by a time offset
+
+    Request body:
+    - event_ids: List of event IDs to move
+    - time_offset_minutes: Number of minutes to move events (can be negative)
+
+    Returns:
+    - Success response with updated events
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'event_ids' not in data or 'time_offset_minutes' not in data:
+            return error_response("Event IDs and time_offset_minutes are required", 400)
+
+        event_ids = data['event_ids']
+        time_offset_minutes = data['time_offset_minutes']
+
+        if not isinstance(event_ids, list) or not event_ids:
+            return error_response("Event IDs must be a non-empty list", 400)
+
+        if not isinstance(time_offset_minutes, int):
+            return error_response("time_offset_minutes must be an integer", 400)
+
+        # Find events that belong to the current user
+        events = Event.query.filter(
+            Event.id.in_(event_ids),
+            Event.user_id == current_user.id
+        ).all()
+
+        if not events:
+            return error_response("No events found to move", 404)
+
+        time_offset = timedelta(minutes=time_offset_minutes)
+        updated_events = []
+        errors = []
+
+        for event in events:
+            try:
+                # Calculate new times
+                new_start = event.start_datetime + time_offset
+                new_end = event.end_datetime + time_offset if event.end_datetime else None
+
+                # Update event times
+                event.start_datetime = new_start
+                if new_end:
+                    event.end_datetime = new_end
+
+                # Update relative reminders
+                relative_reminders = Reminder.query.filter_by(event_id=event.id, is_relative=True).all()
+                for reminder in relative_reminders:
+                    if reminder.minutes_before is not None:
+                        new_reminder_time = new_start - timedelta(minutes=reminder.minutes_before)
+                        if new_reminder_time > datetime.utcnow():  # Only update if not in the past
+                            reminder.reminder_time = new_reminder_time
+                            reminder.updated_at = datetime.utcnow()
+
+                event.updated_at = datetime.utcnow()
+                updated_events.append(event)
+
+            except Exception as e:
+                errors.append(f"Event {event.id}: {str(e)}")
+
+        db.session.commit()
+
+        # Prepare response data
+        events_data = []
+        for event in updated_events:
+            events_data.append({
+                "id": event.id,
+                "title": event.title,
+                "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
+            })
+
+        response_data = {
+            "updated_count": len(updated_events),
+            "events": events_data
+        }
+
+        if errors:
+            response_data["errors"] = errors
+
+        message = f"Successfully moved {len(updated_events)} event(s)"
+        if errors:
+            message += f" with {len(errors)} error(s)"
+
+        logger.info(f"Bulk moved {len(updated_events)} events by user {current_user.username}")
+        return success_response(data=response_data, message=message)
+
+    except Exception as e:
+        logger.error(f"Error in bulk move events: {str(e)}")
+        db.session.rollback()
+        return error_response("An error occurred while moving events", 500)
+
+
+@events_bp.route('/bulk/copy', methods=['POST'])
+@jwt_required()
+@rate_limit(limit=5, window=300)  # 5 bulk copy operations per 5 minutes
+@handle_validation_errors
+@handle_database_errors
+@log_request_info
+def bulk_copy_events():
+    """
+    Copy multiple events
+
+    Request body:
+    - event_ids: List of event IDs to copy
+    - time_offset_minutes: (optional) Number of minutes to offset copied events
+    - copy_reminders: (optional) Whether to copy reminders (default: false)
+
+    Returns:
+    - Success response with copied events
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'event_ids' not in data:
+            return error_response("Event IDs are required", 400)
+
+        event_ids = data['event_ids']
+        time_offset_minutes = data.get('time_offset_minutes', 0)
+        copy_reminders = data.get('copy_reminders', False)
+
+        if not isinstance(event_ids, list) or not event_ids:
+            return error_response("Event IDs must be a non-empty list", 400)
+
+        if len(event_ids) > 20:  # Limit bulk copy operations
+            return error_response("Cannot copy more than 20 events at once", 400)
+
+        # Find events that belong to the current user
+        events = Event.query.filter(
+            Event.id.in_(event_ids),
+            Event.user_id == current_user.id
+        ).all()
+
+        if not events:
+            return error_response("No events found to copy", 404)
+
+        time_offset = timedelta(minutes=time_offset_minutes)
+        copied_events = []
+        errors = []
+
+        for event in events:
+            try:
+                # Calculate new times
+                new_start = event.start_datetime + time_offset
+                new_end = event.end_datetime + time_offset if event.end_datetime else None
+
+                # Create new event
+                new_event = Event(
+                    user_id=current_user.id,
+                    title=f"Copy of {event.title}",
+                    description=event.description,
+                    start_datetime=new_start,
+                    end_datetime=new_end,
+                    is_all_day=event.is_all_day,
+                    color=event.color,
+                    is_recurring=False,  # Don't copy recurrence rules
+                    recurrence_id=None
+                )
+
+                # Copy categories
+                new_event.categories = event.categories
+
+                db.session.add(new_event)
+                db.session.flush()  # Get the ID
+
+                # Copy reminders if requested
+                if copy_reminders:
+                    for reminder in event.reminders:
+                        if reminder.is_relative and reminder.minutes_before is not None:
+                            # Relative reminder
+                            new_reminder_time = new_start - timedelta(minutes=reminder.minutes_before)
+                        else:
+                            # Absolute reminder - offset by the same amount
+                            new_reminder_time = reminder.reminder_time + time_offset
+
+                        # Only create reminder if it's in the future
+                        if new_reminder_time > datetime.utcnow():
+                            new_reminder = Reminder(
+                                event_id=new_event.id,
+                                reminder_time=new_reminder_time,
+                                notification_sent=False,
+                                notification_type=reminder.notification_type,
+                                minutes_before=reminder.minutes_before,
+                                is_relative=reminder.is_relative
+                            )
+                            db.session.add(new_reminder)
+
+                copied_events.append(new_event)
+
+            except Exception as e:
+                errors.append(f"Event {event.id}: {str(e)}")
+
+        db.session.commit()
+
+        # Prepare response data
+        events_data = []
+        for event in copied_events:
+            events_data.append({
+                "id": event.id,
+                "title": event.title,
+                "start_datetime": event.start_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z'),
+                "end_datetime": event.end_datetime.replace(tzinfo=timezone.utc).isoformat().replace('+00:00', 'Z') if event.end_datetime else None,
+                "categories": [cat.to_dict() for cat in event.categories]
+            })
+
+        response_data = {
+            "copied_count": len(copied_events),
+            "events": events_data
+        }
+
+        if errors:
+            response_data["errors"] = errors
+
+        message = f"Successfully copied {len(copied_events)} event(s)"
+        if errors:
+            message += f" with {len(errors)} error(s)"
+
+        logger.info(f"Bulk copied {len(copied_events)} events by user {current_user.username}")
+        return success_response(data=response_data, message=message, status_code=201)
+
+    except Exception as e:
+        logger.error(f"Error in bulk copy events: {str(e)}")
+        db.session.rollback()
+        return error_response("An error occurred while copying events", 500)
